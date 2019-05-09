@@ -105,7 +105,13 @@ module Ransack
         #
         def join_sources
           base, joins =
-          if ::ActiveRecord::VERSION::STRING > Constants::RAILS_5_2_0
+          if ::ActiveRecord::VERSION::STRING >= Constants::RAILS_6_0
+            alias_tracker = ::ActiveRecord::Associations::AliasTracker.create(self.klass.connection, @object.table.name, [])
+            [
+              Arel::SelectManager.new(@object.table),
+              @join_dependency.join_constraints(@object.joins_values, alias_tracker)
+            ]
+          elsif ::ActiveRecord::VERSION::STRING > Constants::RAILS_5_2_0
             alias_tracker = ::ActiveRecord::Associations::AliasTracker.create(self.klass.connection, @object.table.name, [])
             [
               Arel::SelectManager.new(@object.table),
@@ -271,9 +277,16 @@ module Ransack
             join_nodes.each do |join|
               join_dependency.send(:alias_tracker).aliases[join.left.name.downcase] = 1
             end
-          else
+          elsif ::ActiveRecord::VERSION::STRING < Constants::RAILS_6_0
             alias_tracker = ::ActiveRecord::Associations::AliasTracker.create(self.klass.connection, relation.table.name, join_list)
             join_dependency = Polyamorous::JoinDependency.new(relation.klass, relation.table, association_joins)
+            join_dependency.instance_variable_set(:@alias_tracker, alias_tracker)
+            join_nodes.each do |join|
+              join_dependency.send(:alias_tracker).aliases[join.left.name.downcase] = 1
+            end
+          else
+            alias_tracker = ::ActiveRecord::Associations::AliasTracker.create(self.klass.connection, relation.table.name, join_list)
+            join_dependency = Polyamorous::JoinDependency.new(relation.klass, relation.table, association_joins, Arel::Nodes::OuterJoin)
             join_dependency.instance_variable_set(:@alias_tracker, alias_tracker)
             join_nodes.each do |join|
               join_dependency.send(:alias_tracker).aliases[join.left.name.downcase] = 1
@@ -317,11 +330,19 @@ module Ransack
               alias_tracker
             )
             found_association = jd.instance_variable_get(:@join_root).children.last
+          elsif ::ActiveRecord::VERSION::STRING < Constants::RAILS_6_0
+            jd = Polyamorous::JoinDependency.new(
+              parent.base_klass,
+              parent.base_klass.arel_table,
+              Polyamorous::Join.new(name, @join_type, klass),
+            )
+            found_association = jd.instance_variable_get(:@join_root).children.last
           else
             jd = Polyamorous::JoinDependency.new(
               parent.base_klass,
               parent.base_klass.arel_table,
               Polyamorous::Join.new(name, @join_type, klass),
+              Arel::Nodes::OuterJoin
             )
             found_association = jd.instance_variable_get(:@join_root).children.last
           end
